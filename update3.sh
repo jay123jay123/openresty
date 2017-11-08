@@ -1,0 +1,122 @@
+#!/bin/bash
+# kill process  --- sh update.sh 1
+
+source /etc/profile
+Ary="activity appcenter aroundopenapi bonus cas circle cloudtchstat cloudteach cloudwork exam exercisesbank growing integration member notify openapi pay teacheval headlines hubeiwms"
+
+function proDeamon() {
+	NUM=`ps aux |grep  update3 |grep openresty |wc -l`
+	if [ $NUM -ge 2 ];then
+		exit
+	fi
+}
+
+function kilDeamon(){
+	ps aux |grep update3 |grep -v grep  |awk '{print $2}' |xargs kill -9
+	for NAM in $Ary
+	do
+		rm -f /tmp/$NAM
+	done
+}
+
+function alert(){
+	a=0
+	if [ -f "/tmp/$1" ];then
+		a=`cat /tmp/$1`
+		if [ $a -gt 3 ];then
+			return 0 
+		fi
+	fi
+	#echo "调用curl"
+	if [ $a -eq 3 ];then
+		curl -X POST -d 'touser=CloudMonitor&content='$1' upstream update failed on '$2 http://192.168.8.253/sendchat.php >/dev/null 2>&1
+	fi
+	echo `expr $a + 1` > /tmp/$1
+}
+
+function rmalert(){
+	if [ -f "/tmp/$1" ];then
+		rm -f /tmp/$1
+		#echo "调用rm"
+		curl -X POST -d 'touser=CloudMonitor&content='$1' upstream update successfully on '$2 http://192.168.8.253/sendchat.php >/dev/null 2>&1
+	fi
+}
+
+function checkbackground(){
+	if [ $NAM == "headlines" ];then
+		return 1
+	fi	
+
+	for i in $host
+	do  
+		code=`curl -I --connect-timeout 3 -m 3  -o /dev/null -s -w %{http_code} "http://"$(echo $i|sed -e 's/\"//g')":8080/sanity/status"`
+		if [ $code -ne '200' ];then 
+			return 0
+		fi
+	done
+     
+        return 1
+}
+
+
+function setRedis(){
+	for NAM in $Ary
+	do
+	
+		#echo $NAM
+		#echo 'DEL '$NAM'_new' |xargs   redis-cli  -h 192.168.30.47
+		echo 'DEL '$NAM'_new' |xargs   redis-cli  -h 127.0.0.1
+		#curl -XGET http://192.168.8.155:8080/v2/apps/$NAM/test/tasks 2>/dev/null | jq .tasks[].ipAddresses[].ipAddress  |xargs   redis-cli  -h 192.168.30.47  SADD $NAM"_new"
+		host=`curl  --connect-timeout 3 -m 3   -XGET http://localhost:8080/v2/apps/$NAM/calico/tasks 2>/dev/null | jq .tasks[].ipAddresses[].ipAddress`
+		if [ $? != 0 ];then
+			#报警
+			#echo $NAM"获取失败"
+			alert $NAM `hostname`
+			continue
+		fi
+		if [ `echo $host |awk '{print length($0)}'` -lt 10 ];then
+			#报警
+			#echo "长度错误"
+			alert $NAM `hostname`
+			continue
+		fi
+        	if [ $NAM == "circle" ];then
+			NAM2=$NAM"2"
+                	host2=`curl  --connect-timeout 3 -m 3   -XGET http://localhost:8080/v2/apps/$NAM2/calico/tasks 2>/dev/null | jq .tasks[].ipAddresses[].ipAddress`
+			host=$host" "$host2
+	        fi
+
+                echo $NAM " "  $host 		
+		checkbackground
+                if [ $? != 1 ];then
+			continue
+		fi
+
+		echo $host  |xargs   redis-cli  -h 127.0.0.1  SADD $NAM"_new"
+		echo 'RENAME '$NAM'_new ' $NAM |xargs   redis-cli  -h 127.0.0.1
+		rmalert $NAM `hostname`
+	done
+}
+
+if [ -n "$1" ];then
+	kilDeamon
+	exit
+fi
+
+proDeamon
+
+#alert a
+#rmalert a
+
+while true 
+do
+	setRedis
+	sleep 5
+done
+
+
+#for (( i=0;i<9;i++ ))
+#do
+#	setRedis 
+#	sleep 5
+#done
